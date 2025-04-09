@@ -17,9 +17,12 @@ def compute_mean_knn_dist(points: torch.Tensor, k: int = 3) -> torch.Tensor:
     diffs = points[:, None, :] - points[None, :, :]
     dists_sq = torch.sum(diffs ** 2, dim=-1)
 
+    print('points', points.shape)
+    print('diffs', diffs.shape)
     # TODO: Ignore self-distances (distance of each point to itself)
     # Hint: Use fill_diagonal_ to set diagonal values to infinity
     # dists_sq.fill_diagonal_(......)
+
 
     # TODO: Find k-nearest neighbors
     # Hint: Use torch.topk to find the smallest k distances for each point

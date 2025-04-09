@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from  .camera import extract_camera_params
+import open3d as o3d
 
 
 def get_point_clouds(cameras, depths, alphas, rgbs=None):
@@ -26,21 +27,82 @@ def get_point_clouds(cameras, depths, alphas, rgbs=None):
     coords = []
     rgbas = []
 
+    N = intrinsics.shape[0]
+    
     # TODO: Compute ray origins and directions for each pixel
     # Hint: You need to use the camera intrinsics (intrinsics) and extrinsics (c2ws)
     # to convert pixel coordinates into world-space rays.
     # rays_o, rays_d = ......
+    
+
+    device = torch.device('cuda')
+
+    rays_o_c = torch.tensor([0, 0, 0, 1], dtype=torch.double)         
+    rays_o_c = rays_o_c.repeat(N, 1)
+    rays_o_c = rays_o_c.unsqueeze(-1).to(device)   # Shape: (200, 4, 1)
+    
+    # c2ws_inv = torch.linalg.inv(c2ws).to(dtype=torch.double)
+    # c2ws_inv = torch.linalg.inv(c2ws)
+    
+    # rays_o = torch.bmm(c2ws_inv, rays_o_c)  # [200, 4, 1], one for each image
+
+    
+    
+    w_coords = torch.arange(W).float()  # [0, 1, 2, ..., W-1]
+    h_coords = torch.arange(H).float()  # [0, 1, 2, ..., H-1]
+
+    # Create 2D coordinate grids
+    grid_w, grid_h = torch.meshgrid(w_coords, h_coords, indexing='xy')  # H, W
+    grid_one = torch.ones(H, W)
+    pix_coords = torch.stack([grid_w, grid_h, grid_one], dim=-1)
+    pix_coords = pix_coords.unsqueeze(0).unsqueeze(-1).expand(N, -1, -1, -1, 1).to(device)
+
+    intrinsics = intrinsics[:, :3, :3]
+    
+    intrinsics_inv = torch.linalg.inv(intrinsics)
+    intrinsics_inv = intrinsics_inv.unsqueeze(1).unsqueeze(2)
+    intrinsics_inv = intrinsics_inv.expand(-1, H, W, -1, -1)
+    
+    rays_d_c = torch.matmul(intrinsics_inv, pix_coords)   # [200, 6, 10, 3, 1] # [X/Z, Y/Z, 1] in cam frame
+    rays_d_c = rays_d_c.squeeze(-1)
+    # print('rays_d_c', rays_d_c.shape)
+    
 
     # TODO: Compute 3D world coordinates using depth values
     # Hint: Use the ray equation: P = O + D * depth
     # P: 3D point, O: ray origin, D: ray direction, depth: depth value
-    # pts = ......
+    
+    depths = depths.unsqueeze(-1)
+    
+    points_c = rays_d_c * depths
+    
+    points_c = torch.cat((points_c, torch.ones(N, H, W, 1).to(device)), dim=-1)
+    points_c = points_c.unsqueeze(-1)
+
+    
+    c2ws = c2ws.unsqueeze(1).unsqueeze(2)
+    c2ws = c2ws.expand(-1, H, W, -1, -1)
+
+    points = torch.matmul(c2ws, points_c)   # (Xw, Yw, Zw, 1)
+    points = points.squeeze(-1)
+    points = points[:, :, :, :3]
+    
 
     # TODO: Apply the alpha mask to filter valid points
     # Hint: Mask should be applied to both coordinates and RGB values (if provided)
     # mask = ......
     # coords = pts[mask].cpu().numpy()
 
+    coords = points[alphas.to(dtype=bool)].cpu().numpy()
+    print('filtered coords', coords.shape)  # (9815241, 3)
+
+    
+    rgbas = torch.cat((rgbs, alphas.unsqueeze(-1).to(device)), dim=-1)
+    rgbas = rgbas[alphas.to(dtype=bool)].cpu().numpy()
+    print('filtered rgbas', rgbas.shape)
+
+    visualize(coords, rgbas)
+    
     if rgbs is not None:
         channels = dict(
             R=rgbas[..., 0],
@@ -53,6 +115,68 @@ def get_point_clouds(cameras, depths, alphas, rgbs=None):
 
     point_cloud = PointCloud(coords, channels)
     return point_cloud
+
+def visualize(coords, rgbas):
+
+
+    import numpy as np
+    import plotly.graph_objects as go
+
+    # Normalize RGB
+    if rgbas[:, :3].max() > 1.0:
+        rgb = rgbas[:, :3] / 255.0
+    else:
+        rgb = rgbas[:, :3]
+
+    # Convert to Plotly-compatible color strings
+    rgb_str = ['rgba({},{},{},{})'.format(int(r*255), int(g*255), int(b*255), a)
+            for (r, g, b), a in zip(rgb, rgbas[:, 3])]
+
+    # Sample if too many points
+    max_points = 100000
+    if len(coords) > max_points:
+        idx = np.random.choice(len(coords), max_points, replace=False)
+        coords = coords[idx]
+        rgb_str = [rgb_str[i] for i in idx]
+
+    # Create scatter plot
+    fig = go.Figure(data=go.Scatter3d(
+        x=coords[:, 0],
+        y=coords[:, 1],
+        z=coords[:, 2],
+        mode='markers',
+        marker=dict(
+            size=1.5,
+            color=rgb_str,
+        )
+    ))
+    fig.update_layout(scene=dict(aspectmode='data'))
+
+    x_max = 0.8
+    x_min = -0.8
+    y_max = 1.5
+    y_min = -1.5
+    z_max = 1
+    z_min = -0.4
+    # Control the visible range of each axis
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(range=[x_min, x_max]),
+            yaxis=dict(range=[y_min, y_max]),
+            zaxis=dict(range=[z_min, z_max]),
+            # aspectmode='data'
+            aspectmode='manual',
+            aspectratio=dict(
+            x=(x_max - x_min),
+            y=(y_max - y_min),
+            z=(z_max - z_min),
+        )
+        )
+    )
+    print('showing figure')
+    fig.show()
+
+
 
 
 def preprocess(data, channel):

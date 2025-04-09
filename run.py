@@ -14,8 +14,10 @@ from torch_3dgs.utils import dict_to_device
 if __name__ == "__main__":
     config = OmegaConf.load("config.yaml")
     os.makedirs(config.output_folder, exist_ok=True)
+    # print('config.device', type(config.device))
+    # print(config.device)
     device = torch.device(config.device)
-
+    # print('device', device)
     data = read_data(config.data_folder, resize_scale=config.resize_scale)
     data = dict_to_device(data, device)
 
